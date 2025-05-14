@@ -2315,13 +2315,6 @@ invoke_native_with_hw_bound_check(WASMExecEnv *exec_env, void *func_ptr,
 #endif
     bool ret;
 
-    /* Check native stack overflow firstly to ensure we have enough
-       native stack to run the following codes before actually calling
-       the aot function in invokeNative function. */
-    if (!wasm_runtime_detect_native_stack_overflow(exec_env)) {
-        return false;
-    }
-
     if (!exec_env_tls) {
         if (!os_thread_signal_inited()) {
             aot_set_exception(module_inst, "thread signal env not inited");
@@ -2338,6 +2331,13 @@ invoke_native_with_hw_bound_check(WASMExecEnv *exec_env, void *func_ptr,
             aot_set_exception(module_inst, "invalid exec env");
             return false;
         }
+    }
+
+    /* Check native stack overflow firstly to ensure we have enough
+       native stack to run the following codes before actually calling
+       the aot function in invokeNative function. */
+    if (!wasm_runtime_detect_native_stack_overflow(exec_env)) {
+        return false;
     }
 
     wasm_exec_env_push_jmpbuf(exec_env, &jmpbuf_node);
@@ -3285,8 +3285,25 @@ aot_call_indirect(WASMExecEnv *exec_env, uint32 tbl_idx, uint32 table_elem_idx,
             cell_num += wasm_value_type_cell_num(ext_ret_types[i]);
         }
 
+#if WASM_ENABLE_AOT_STACK_FRAME != 0
+        void *prev_frame = get_top_frame(exec_env);
+        if (!is_frame_per_function(exec_env)
+            && !aot_alloc_frame(exec_env, func_idx)) {
+            if (argv1 != argv1_buf)
+                wasm_runtime_free(argv1);
+            return false;
+        }
+#endif
         ret = invoke_native_internal(exec_env, func_ptr, func_type, signature,
                                      attachment, argv1, argc, argv);
+#if WASM_ENABLE_AOT_STACK_FRAME != 0
+        /* Free all frames allocated, note that some frames
+           may be allocated in AOT code and haven't been
+           freed if exception occurred */
+        while (get_top_frame(exec_env) != prev_frame)
+            aot_free_frame(exec_env);
+#endif
+
         if (!ret) {
             if (argv1 != argv1_buf)
                 wasm_runtime_free(argv1);
@@ -3327,8 +3344,25 @@ aot_call_indirect(WASMExecEnv *exec_env, uint32 tbl_idx, uint32 table_elem_idx,
         return true;
     }
     else {
+#if WASM_ENABLE_AOT_STACK_FRAME != 0
+        void *prev_frame = get_top_frame(exec_env);
+        /* Only allocate frame for frame-per-call mode; in the
+           frame-per-function mode the frame is allocated at the
+           beginning of the function. */
+        if (!is_frame_per_function(exec_env)
+            && !aot_alloc_frame(exec_env, func_idx)) {
+            return false;
+        }
+#endif
         ret = invoke_native_internal(exec_env, func_ptr, func_type, signature,
                                      attachment, argv, argc, argv);
+#if WASM_ENABLE_AOT_STACK_FRAME != 0
+        /* Free all frames allocated, note that some frames
+           may be allocated in AOT code and haven't been
+           freed if exception occurred */
+        while (get_top_frame(exec_env) != prev_frame)
+            aot_free_frame(exec_env);
+#endif
         if (!ret)
             goto fail;
 

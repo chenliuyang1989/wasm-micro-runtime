@@ -157,6 +157,9 @@ elseif (WAMR_BUILD_SANITIZER STREQUAL "asan")
 elseif (WAMR_BUILD_SANITIZER STREQUAL "tsan")
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0 -fno-omit-frame-pointer -fsanitize=thread -fno-sanitize-recover=all" )
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=thread")
+elseif (WAMR_BUILD_SANITIZER STREQUAL "posan")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0 -fno-omit-frame-pointer -fsanitize=pointer-overflow -fno-sanitize-recover=all" )
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=pointer-overflow")
 elseif (NOT (WAMR_BUILD_SANITIZER STREQUAL "") )
   message(SEND_ERROR "Unsupported sanitizer: ${WAMR_BUILD_SANITIZER}")
 endif()
@@ -276,7 +279,12 @@ else ()
   message ("     Libc builtin disabled")
 endif ()
 if (WAMR_BUILD_LIBC_UVWASI EQUAL 1)
-  message ("     Libc WASI enabled with uvwasi implementation")
+  message ("     Libc WASI enabled with uvwasi implementation\n"
+           "     WANRING:: uvwasi does not currently provide the comprehensive\n"
+           "     file system security properties provided by some WASI runtimes.\n"
+           "     Full support for secure file system sandboxing may or may not\n"
+           "     be implemented in future. In the mean time, DO NOT RELY ON IT\n"
+           "     TO RUN UNTRUSTED CODE.")
 elseif (WAMR_BUILD_LIBC_WASI EQUAL 1)
   message ("     Libc WASI enabled")
 else ()
@@ -374,10 +382,7 @@ else ()
   message ("     Wakeup of blocking operations enabled")
 endif ()
 if (WAMR_BUILD_SIMD EQUAL 1)
-  if (WAMR_BUILD_FAST_INTERP EQUAL 1 AND WAMR_BUILD_SIMDE EQUAL 0)
-    set(SIMD_ENABLED 0)
-    message("     SIMD disabled for fast-interp as simde is not being built")
-  elseif (WAMR_BUILD_TARGET MATCHES "RISCV64.*")
+  if (WAMR_BUILD_TARGET MATCHES "RISCV64.*")
     set(SIMD_ENABLED 0)
     message ("     SIMD disabled due to not supported on target RISCV64")
   else()
@@ -674,7 +679,6 @@ endif ()
 message (
 "-- About Wasm Proposals:\n"
 "     Always-on:\n"
-"       \"Extended Constant Expressions\"\n"
 "       \"Multi-value\"\n"
 "       \"Non-trapping float-to-int conversions\"\n"
 "       \"Sign-extension operators\"\n"
@@ -695,6 +699,7 @@ message (
 "       \"Branch Hinting\"\n"
 "       \"Custom Annotation Syntax in the Text Format\"\n"
 "       \"Exception handling\"\n"
+"       \"Extended Constant Expressions\"\n"
 "       \"Import/Export of Mutable Globals\"\n"
 "       \"JS String Builtins\"\n"
 "       \"Relaxed SIMD\"\n"

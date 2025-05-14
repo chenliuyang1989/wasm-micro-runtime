@@ -1013,6 +1013,22 @@ fail:
                         SET_FRAME_REF((unsigned)(dst_offsets[0] + 1));     \
                     }                                                      \
                 }                                                          \
+                else if (cells[0] == 4) {                                  \
+                    PUT_V128_TO_ADDR(                                      \
+                        frame_lp + dst_offsets[0],                         \
+                        GET_V128_FROM_ADDR(frame_lp + src_offsets[0]));    \
+                    /* Ignore constants because they are not reference */  \
+                    if (src_offsets[0] >= 0) {                             \
+                        CLEAR_FRAME_REF((unsigned)src_offsets[0]);         \
+                        CLEAR_FRAME_REF((unsigned)(src_offsets[0] + 1));   \
+                        CLEAR_FRAME_REF((unsigned)(src_offsets[0] + 2));   \
+                        CLEAR_FRAME_REF((unsigned)(src_offsets[0] + 3));   \
+                        SET_FRAME_REF((unsigned)dst_offsets[0]);           \
+                        SET_FRAME_REF((unsigned)(dst_offsets[0] + 1));     \
+                        SET_FRAME_REF((unsigned)(dst_offsets[0] + 2));     \
+                        SET_FRAME_REF((unsigned)(dst_offsets[0] + 3));     \
+                    }                                                      \
+                }                                                          \
             }                                                              \
             else {                                                         \
                 if (!copy_stack_values(module, frame_lp, arity, frame_ref, \
@@ -1052,6 +1068,11 @@ fail:
                     PUT_I64_TO_ADDR(                                        \
                         frame_lp + dst_offsets[0],                          \
                         GET_I64_FROM_ADDR(frame_lp + src_offsets[0]));      \
+                }                                                           \
+                else if (cells[0] == 4) {                                   \
+                    PUT_V128_TO_ADDR(                                       \
+                        frame_lp + dst_offsets[0],                          \
+                        GET_V128_FROM_ADDR(frame_lp + src_offsets[0]));     \
                 }                                                           \
             }                                                               \
             else {                                                          \
@@ -1867,6 +1888,27 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
                 }
                 HANDLE_OP_END();
             }
+#if WASM_ENABLE_SIMD != 0
+            HANDLE_OP(WASM_OP_SELECT_128)
+            {
+                cond = frame_lp[GET_OFFSET()];
+                addr1 = GET_OFFSET();
+                addr2 = GET_OFFSET();
+                addr_ret = GET_OFFSET();
+
+                if (!cond) {
+                    if (addr_ret != addr1)
+                        PUT_V128_TO_ADDR(frame_lp + addr_ret,
+                                         GET_V128_FROM_ADDR(frame_lp + addr1));
+                }
+                else {
+                    if (addr_ret != addr2)
+                        PUT_V128_TO_ADDR(frame_lp + addr_ret,
+                                         GET_V128_FROM_ADDR(frame_lp + addr2));
+                }
+                HANDLE_OP_END();
+            }
+#endif
 
 #if WASM_ENABLE_GC != 0
             HANDLE_OP(WASM_OP_SELECT_T)
@@ -3544,7 +3586,7 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
                 HANDLE_OP_END();
             }
 
-#if WASM_ENABLE_SIMD != 0
+#if WASM_ENABLE_SIMDE != 0
             HANDLE_OP(EXT_OP_SET_LOCAL_FAST_V128)
             HANDLE_OP(EXT_OP_TEE_LOCAL_FAST_V128)
             {
@@ -3598,7 +3640,7 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
                                 GET_I64_FROM_ADDR((uint32 *)global_addr));
                 HANDLE_OP_END();
             }
-#if WASM_ENABLE_SIMD != 0
+#if WASM_ENABLE_SIMDE != 0
             HANDLE_OP(WASM_OP_GET_GLOBAL_V128)
             {
                 global_idx = read_uint32(frame_ip);
@@ -4935,7 +4977,7 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
 
                 HANDLE_OP_END();
             }
-#if WASM_ENABLE_SIMD != 0
+#if WASM_ENABLE_SIMDE != 0
             HANDLE_OP(EXT_OP_COPY_STACK_TOP_V128)
             {
                 addr1 = GET_OFFSET();
@@ -5163,7 +5205,6 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
                     {
                         uint32 dst, src, len;
                         uint8 *mdst, *msrc;
-                        uint64 dlen;
 
                         len = POP_I32();
                         src = POP_I32();
@@ -5173,15 +5214,9 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
                         linear_mem_size = get_linear_mem_size();
 #endif
 
-                        dlen = linear_mem_size - dst;
-
 #ifndef OS_ENABLE_HW_BOUND_CHECK
                         CHECK_BULK_MEMORY_OVERFLOW(src, len, msrc);
                         CHECK_BULK_MEMORY_OVERFLOW(dst, len, mdst);
-#if WASM_ENABLE_SHARED_HEAP != 0
-                        if (app_addr_in_shared_heap((uint64)dst, len))
-                            dlen = shared_heap_end_off - dst + 1;
-#endif
 #else /* else of OS_ENABLE_HW_BOUND_CHECK */
 #if WASM_ENABLE_SHARED_HEAP != 0
                         if (app_addr_in_shared_heap((uint64)src, len))
@@ -5197,7 +5232,6 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
 #if WASM_ENABLE_SHARED_HEAP != 0
                         if (app_addr_in_shared_heap((uint64)dst, len)) {
                             shared_heap_addr_app_to_native((uint64)dst, mdst);
-                            dlen = shared_heap_end_off - dst + 1;
                         }
                         else
 #endif
@@ -5208,8 +5242,21 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
                         }
 #endif /* end of OS_ENABLE_HW_BOUND_CHECK */
 
-                        /* allowing the destination and source to overlap */
-                        bh_memmove_s(mdst, (uint32)dlen, msrc, len);
+                        /*
+                         * avoid unnecessary operations
+                         *
+                         * since dst and src both are valid indexes in the
+                         * linear memory, mdst and msrc can't be NULL
+                         *
+                         * The spec. converts memory.copy into i32.load8 and
+                         * i32.store8; the following are runtime-specific
+                         * optimizations.
+                         *
+                         */
+                        if (len && mdst != msrc) {
+                            /* allowing the destination and source to overlap */
+                            memmove(mdst, msrc, len);
+                        }
                         break;
                     }
                     case WASM_OP_MEMORY_FILL:
@@ -5816,12 +5863,12 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
                 goto call_func_from_entry;
             }
 #if WASM_ENABLE_SIMDE != 0
-#define SIMD_V128_TO_SIMDE_V128(v)                                      \
+#define SIMD_V128_TO_SIMDE_V128(s_v)                                    \
     ({                                                                  \
         bh_assert(sizeof(V128) == sizeof(simde_v128_t));                \
-        simde_v128_t result;                                            \
-        bh_memcpy_s(&result, sizeof(simde_v128_t), &(v), sizeof(V128)); \
-        result;                                                         \
+        simde_v128_t se_v;                                              \
+        bh_memcpy_s(&se_v, sizeof(simde_v128_t), &(s_v), sizeof(V128)); \
+        se_v;                                                           \
     })
 
 #define SIMDE_V128_TO_SIMD_V128(sv, v)                                \
@@ -5995,10 +6042,10 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
                     /* Splat */
 #define SIMD_SPLAT_OP(simde_func, pop_func, val_type)  \
     do {                                               \
-        val_type val = pop_func();                     \
+        val_type v = pop_func();                       \
         addr_ret = GET_OFFSET();                       \
                                                        \
-        simde_v128_t simde_result = simde_func(val);   \
+        simde_v128_t simde_result = simde_func(v);     \
                                                        \
         V128 result;                                   \
         SIMDE_V128_TO_SIMD_V128(simde_result, result); \
@@ -6015,7 +6062,7 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
 
                     case SIMD_i8x16_splat:
                     {
-                        uint32 val = POP_I32();
+                        val = POP_I32();
                         addr_ret = GET_OFFSET();
 
                         simde_v128_t simde_result = simde_wasm_i8x16_splat(val);
@@ -6666,19 +6713,19 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
                         SIMD_SINGLE_OP(simde_wasm_f32x4_nearest);
                         break;
                     }
-#define SIMD_LANE_SHIFT(simde_func)                         \
-    do {                                                    \
-        int32 count = POP_I32();                            \
-        V128 v1 = POP_V128();                               \
-        addr_ret = GET_OFFSET();                            \
-                                                            \
-        simde_v128_t simde_result =                         \
-            simde_func(SIMD_V128_TO_SIMDE_V128(v1), count); \
-                                                            \
-        V128 result;                                        \
-        SIMDE_V128_TO_SIMD_V128(simde_result, result);      \
-                                                            \
-        PUT_V128_TO_ADDR(frame_lp + addr_ret, result);      \
+#define SIMD_LANE_SHIFT(simde_func)                     \
+    do {                                                \
+        int32 c = POP_I32();                            \
+        V128 v1 = POP_V128();                           \
+        addr_ret = GET_OFFSET();                        \
+                                                        \
+        simde_v128_t simde_result =                     \
+            simde_func(SIMD_V128_TO_SIMDE_V128(v1), c); \
+                                                        \
+        V128 result;                                    \
+        SIMDE_V128_TO_SIMD_V128(simde_result, result);  \
+                                                        \
+        PUT_V128_TO_ADDR(frame_lp + addr_ret, result);  \
     } while (0)
                     case SIMD_i8x16_shl:
                     {
@@ -7488,7 +7535,7 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
 #if WASM_ENABLE_LABELS_AS_VALUES == 0
         continue;
 #else
-            FETCH_OPCODE_AND_DISPATCH();
+    FETCH_OPCODE_AND_DISPATCH();
 #endif
 
 #if WASM_ENABLE_TAIL_CALL != 0 || WASM_ENABLE_GC != 0

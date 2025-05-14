@@ -46,7 +46,8 @@ temp_module_table = {}
 aot_target_options_map = {
     "i386": ["--target=i386"],
     "x86_32": ["--target=i386"],
-    "x86_64": ["--target=x86_64", "--cpu=skylake"],
+    # cf. https://github.com/bytecodealliance/wasm-micro-runtime/issues/3035
+    "x86_64": ["--target=x86_64", "--cpu=skylake", "--size-level=0"],
     "aarch64": ["--target=aarch64", "--target-abi=eabi", "--cpu=cortex-a53"],
     "aarch64_vfp": ["--target=aarch64", "--target-abi=gnueabihf", "--cpu=cortex-a53"],
     "armv7": ["--target=armv7", "--target-abi=eabi", "--cpu=cortex-a9", "--cpu-features=-neon"],
@@ -1541,11 +1542,10 @@ if __name__ == "__main__":
 
                 if test_aot:
                     new_module_aot = os.path.join(tempfile.gettempdir(), name_new + ".aot")
-                    r = compile_wasm_to_aot(new_module, new_module_aot, True, opts, r)
                     try:
-                        assert_prompt(r, ['Compile success'], opts.start_timeout, True)
-                    except:
-                        raise Exception("compile wasm to aot failed")
+                        compile_wasm_to_aot(new_module, new_module_aot, None, opts, r)
+                    except Exception as e:
+                        raise Exception(f"compile wasm to aot failed. {e}")
                     # add aot module into temp_file_repo[]
                     temp_file_repo.append(new_module_aot)
             else:
@@ -1575,7 +1575,8 @@ if __name__ == "__main__":
         try:
             if not opts.no_cleanup:
                 # remove the files under /tempfiles/ and copy of .wasm files
-                log(f"Removing {temp_file_repo}")
+                log(f"Removing tmp*")
+                # log(f"Removing {temp_file_repo}")
 
                 for t in temp_file_repo:
                     # None and empty
@@ -1585,7 +1586,8 @@ if __name__ == "__main__":
                     if os.path.exists(t):
                         os.remove(t)
             else:
-                log(f"Leaving {temp_file_repo}")
+                log(f"Leaving tmp*")
+                # log(f"Leaving {temp_file_repo}")
             
         except Exception as e:
             print("Failed to remove tempfiles: %s" % e)
